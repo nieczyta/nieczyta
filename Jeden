@@ -1,0 +1,199 @@
+#include "stdafx.h"
+#include <iostream>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/ml.hpp>
+#include "opencv2/objdetect.hpp"
+
+using namespace cv;
+using namespace cv::ml;
+using namespace std;
+
+struct trainCells_str {
+	Mat trainCells;
+	trainCells_str *next;
+};
+struct testCells_str {
+	Mat testCells;
+	testCells_str *next;
+};
+struct trainLabels_str {
+	int trainLabels;
+	trainLabels_str *next;
+};
+struct testLabels_str {
+	int testLabels;
+	testLabels_str *next;
+};
+
+struct trainHOG_str {
+	vector <float> descriptors;
+	trainHOG_str *next;
+};
+struct testHOG_str {
+	vector <float> descriptors;
+	testHOG_str *next;
+};
+
+struct descriptors {
+	vector <float> descriptor;
+	descriptors *next;
+};
+
+HOGDescriptor hog(Size(20, 20), Size(8, 8), Size(4, 4), Size(8, 8), 9, 1, -1, 0, 0.2, 0, 64, 1);
+
+void load(string &filename, trainCells_str *htrC, testCells_str *hteC, trainLabels_str *htrL, testLabels_str *hteL, int trainCellsCounter, int testCellsCounter)
+{
+	Mat img = imread(filename, CV_LOAD_IMAGE_GRAYSCALE);
+	int counter = 0;
+	for (int i = 0; i < img.rows; i = i + 20)
+	{
+		for (int j = 0; j < img.cols; j = j + 20)
+		{
+			Mat digit = (img.colRange(j, j + 20).rowRange(i, i + 20)).clone();
+
+			if (j < int(0.9*img.cols))
+			{
+				trainCells_str *neew = new trainCells_str;
+				neew->trainCells = digit;
+				neew->next = htrC;
+				htrC = neew;
+			}
+			else
+			{
+				testCells_str *neew = new testCells_str;
+				neew->testCells = digit;
+				neew->next = hteC;
+				hteC = neew;
+			}
+			counter++;
+		}
+	}
+	float digitClass = 0;
+	for (int i = 0; i<int(0.9*counter); i++)
+	{
+		if (i % 450 == 0 && i != 0)
+		{
+			digitClass++;
+		}
+		trainLabels_str *neew = new trainLabels_str;
+		neew->trainLabels = digitClass;
+		neew->next = htrL;
+		htrL = neew;
+	}
+	digitClass = 0;
+	for (int i = 0; i<int(0.1*counter); i++)
+	{
+		if (i % 50 == 0 && i != 0)
+		{
+			digitClass++;
+		}
+		testLabels_str *neew = new testLabels_str;
+		neew->testLabels = digitClass;
+		neew->next = hteL;
+		hteL = neew;
+	}
+}
+
+void HOG(HOGDescriptor hog, trainCells_str *htrC, testCells_str *hteC, trainHOG_str *htrH, testHOG_str *hteH, int trainCellsCounter, int testCellsCounter, int trainHOGCounter, int testHOGCounter)
+{
+	for (int i = 0; i < trainCellsCounter; i++)
+	{
+		descriptors *newD = new descriptors;
+		hog.compute(htrC->trainCells, newD->descriptor);
+		trainHOG_str *newTrainHOG = new trainHOG_str;
+		newTrainHOG->descriptors = newD->descriptor;
+		newTrainHOG->next = htrH;
+		htrH = newTrainHOG;
+		trainHOGCounter++;
+	}
+	for (int i = 0; i < testCellsCounter; i++)
+	{
+		descriptors *newD = new descriptors;
+		hog.compute(hteC->testCells, newD->descriptor);
+		testHOG_str *newTestHOG = new testHOG_str;
+		newTestHOG->descriptors = newD->descriptor;
+		newTestHOG->next = hteH;
+		hteH = newTestHOG;
+		testHOGCounter++;
+	}
+}
+
+void Matrix(trainHOG_str *htrH, testHOG_str *hteH, Mat &trainMat, Mat &testMat, int trainHOGCounter, int testHOGCounter)
+{
+	float descriptorSize = htrH->descriptors.size();
+	trainHOG_str *temptrH = htrH;
+	for (int i = 0; i < trainHOGCounter; i++)
+	{
+		for (int j = 0; j < descriptorSize; j++)
+		{
+			trainMat.at<float>(i, j) = temptrH->descriptors[j];
+		}
+		temptrH = temptrH->next;
+	}
+	testHOG_str *tempteH = hteH;
+	for (int i = 0; i < testHOGCounter; i++)
+	{
+		for (int j = 0; j < descriptorSize; j++)
+		{
+			testMat.at<float>(i, j) = tempteH->descriptors[j];
+		}
+		tempteH = tempteH->next;
+	}
+	
+}
+
+vector <int> vecTrainLabels(trainLabels_str *htrL)
+{
+	vector <int> trainLabel;
+	trainLabels_str *temp = htrL;
+	while (temp != nullptr)
+	{
+		trainLabel.push_back(temp->trainLabels);
+		temp = temp->next;
+	}
+	return trainLabel;
+}
+
+void Train(Ptr<SVM> svm, Mat &trainMat, trainLabels_str *htrL, vector <int> trainLabel)
+{
+	Ptr<TrainData> td = TrainData::create(trainMat, ROW_SAMPLE, trainLabel);
+	svm->train(td);
+	svm->save("results/results.yml");
+}
+
+void svmPredict(Ptr<SVM> svm, Mat &testResponse, Mat &testMat)
+{
+	svm->predict(testMat, testResponse);
+}
+
+int main()
+{
+	string fileName = "digits.png";
+	Ptr<SVM> svm = SVM::create();
+	svm->setType(SVM::C_SVC);
+	svm->setKernel(SVM::POLY);
+	svm->setTermCriteria(TermCriteria(TermCriteria::MAX_ITER, 10000, 1e-16));
+	svm->setGamma(3);
+	svm->setDegree(3);
+	int trainCellsCounter = 0;
+	int testCellsCounter = 0;
+	int trainHOGCounter = 0;
+	int testHOGCounter = 0;
+	trainCells_str *htrC = nullptr;
+	testCells_str *hteC = nullptr;
+	trainLabels_str *htrL = nullptr;
+	testLabels_str *hteL = nullptr;
+	trainHOG_str *htrH = nullptr;
+	testHOG_str *hteH = nullptr;
+	load(fileName, htrC, hteC, htrL, hteL, trainCellsCounter, testCellsCounter);
+	HOG(hog, htrC, hteC, htrH, hteH, trainCellsCounter, testCellsCounter, trainHOGCounter, testHOGCounter);
+	int descriptorSize = htrH->descriptors.size();
+	Mat trainMat(trainHOGCounter, descriptorSize, CV_32FC1);
+	Mat testMat(testHOGCounter, descriptorSize, CV_32FC1);
+	Matrix(htrH, hteH, trainMat, testMat, trainHOGCounter, testHOGCounter);
+	vector <int> trainLabel = vecTrainLabels(htrL);
+	Train(svm, trainMat, htrL, trainLabel);
+	
+
+}
